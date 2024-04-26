@@ -14,6 +14,7 @@ import multiprocessing as mp
 import time
 
 import numpy as np
+import psutil
 import torch
 import wandb
 from torch.optim.lr_scheduler import CosineAnnealingLR, MultiplicativeLR, OneCycleLR, PolynomialLR
@@ -177,6 +178,7 @@ def main(args):
         args.workers = min(16, mp.cpu_count())
 
     torch.backends.cudnn.benchmark = True
+    system_available_memory = int(psutil.virtual_memory().available / 1024**3)
 
     st = time.time()
     val_set = DetectionDataset(
@@ -202,7 +204,7 @@ def main(args):
     )
     val_loader = DataLoader(
         val_set,
-        batch_size=args.batch_size,
+        batch_size=args.batch_size_val,
         drop_last=False,
         num_workers=args.workers,
         sampler=SequentialSampler(val_set),
@@ -244,7 +246,11 @@ def main(args):
         model = model.cuda()
 
     # Metrics
-    val_metric = LocalizationConfusion(use_polygons=args.rotation and not args.eval_straight)
+    val_metric = LocalizationConfusion(
+        use_polygons=args.rotation and not args.eval_straight,
+        mask_shape=(args.input_size, args.input_size),
+        use_broadcasting=True if system_available_memory > 62 else False,
+    )
 
     if args.test_only:
         print("Running evaluation")
@@ -290,7 +296,7 @@ def main(args):
 
     train_loader = DataLoader(
         train_set,
-        batch_size=args.batch_size,
+        batch_size=args.batch_size_train,
         drop_last=True,
         num_workers=args.workers,
         sampler=RandomSampler(train_set),
@@ -345,7 +351,8 @@ def main(args):
                 "learning_rate": args.lr,
                 "epochs": args.epochs,
                 "weight_decay": args.weight_decay,
-                "batch_size": args.batch_size,
+                "batch_size_train": args.batch_size_train,
+                "batch_size_val": args.batch_size_val,
                 "architecture": args.arch,
                 "input_size": args.input_size,
                 "optimizer": "adam",
@@ -413,7 +420,8 @@ def parse_args():
     parser.add_argument("arch", type=str, help="text-detection model to train")
     parser.add_argument("--name", type=str, default=None, help="Name of your training experiment")
     parser.add_argument("--epochs", type=int, default=10, help="number of epochs to train the model on")
-    parser.add_argument("-b", "--batch_size", type=int, default=2, help="batch size for training")
+    parser.add_argument("-b", "--batch-size-train", type=int, default=2, help="batch size for training")
+    parser.add_argument("-v", "--batch-size-val", type=int, default=2, help="batch size for validation")
     parser.add_argument("--device", default=None, type=int, help="device")
     parser.add_argument(
         "--save-interval-epoch", dest="save_interval_epoch", action="store_true", help="Save model every epoch"
